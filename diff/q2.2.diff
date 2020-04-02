@@ -1,0 +1,14 @@
+--- attack0.py	2020-04-01 14:10:38.834610700 +0800
++++ attack.py	2020-04-01 14:15:38.162284000 +0800
+@@ -35,6 +35,11 @@
+         alpha = 0.0001
+         loss = tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(labels=target_one_hot, logits=logits)) * (
+             -1)  # loss尽量小 === 最大化熵 === 欺骗成功
++        # tv = tf.reduce_sum(tf.image.total_variation(x_norm))
++        # loss += tv * alpha  # 加入正则化
++        # loss = tf.cast(loss, dtype=tf.float32)
++        l2_loss = tf.reduce_mean((x_round - x) ** 2)
++        loss += l2_loss * alpha
+         "acc 大表示攻击失败了"
+         acc = tf.reduce_mean(tf.cast(tf.equal(tf.cast(tf.argmax(preds, 1), dtype=tf.int32),
+                                               tf.cast(tf.argmax(gt_one_hot, 1), dtype=tf.int32)), tf.float32))

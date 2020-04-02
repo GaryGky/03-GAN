@@ -1,0 +1,44 @@
+--- dataset0.py	2020-04-01 16:58:54.694090300 +0800
++++ dataset.py	2020-04-01 16:59:15.175903800 +0800
+@@ -47,9 +47,31 @@
+             img_b = self.samples_mat['X'][i][2048:].reshape(config.image_shape[0], config.image_shape[1], 1)
+             img = np.concatenate((img_r, img_g, img_b), axis=2)
+             label = self.samples_mat['Y'][i]
++            img = affineTrans(img)
+             yield img.astype(np.float32), np.array(label, dtype=np.int32)
+ 
+ 
++def affineTrans(img):
++    pts1 = np.float32([[10, 10], [20, 5], [5, 20]])
++    pts2 = np.float32([[10, 8], [18, 5], [5, 20]])
++    M = cv2.getAffineTransform(pts1, pts2)
++    return cv2.warpAffine(img, M, (32, 32))
++
++
++def bluring(img):
++    return cv2.blur(img, (5, 5))
++
++
++def noise(img, SNR=0.7):
++    img_ = img.transpose(2, 1, 0)
++    c, h, w = img_.shape
++    mask = np.random.choice((0, 1, 2), size=(1, h, w), p=[SNR, (1 - SNR) / 2., (1 - SNR) / 2.])
++    mask = np.repeat(mask, c, axis=0)  # 按channel 复制到 与img具有相同的shape
++    img_[mask == 1] = 255  # pepper
++    img_[mask == 2] = 0  # white
++    return img_.transpose(2, 1, 0)
++
++
+ if __name__ == "__main__":
+     ds = Dataset('train')
+     ds = ds.load()
+@@ -60,6 +82,9 @@
+     while True:
+         for i in range(25):
+             img, label = next(gen)
++            # img = affineTrans(img)
++            # img = cv2.blur(img, (5, 5))
++            img = noise(img, 0.5)
+             print(img.shape)
+             img = cv2.resize(img, (96, 96))
+             cv2.putText(img, label_names[label], (0, config.image_shape[0]), cv2.FONT_HERSHEY_SIMPLEX,

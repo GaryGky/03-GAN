@@ -1,0 +1,110 @@
+--- "code\\attack.py"	2020-03-26 13:02:52.322906200 +0800
++++ attack.py	2020-04-01 21:43:58.567506100 +0800
+@@ -1,6 +1,7 @@
+ # encoding: utf-8
+
+ 
+ from common import config
+ 
+@@ -17,24 +18,31 @@
+ 
+     def generate_graph(self, pre_noise, x, groundTruth, target=None):
+         noise = 10 * tf.tanh(pre_noise)
+-        print(x)
++        # print(x)
+         x_noise = x + noise  ## add perturbation and get adversarial examples: 加入噪声获得对抗样本
+         x_clip = tf.clip_by_value(x_noise, 0, 255)  # 放缩到0-255
+         x_round = x_clip + tf.stop_gradient(x_clip // 1 - x_clip)  # 反传截断 :: 得到对抗样本
+         x_norm = (x_round - mean) / (std + 1e-7)  # 进行标准化
+         logits = self.model.build(x_norm)  # 流过vgg16
+         preds = tf.nn.softmax(logits)  # softmax激活
+-        gt_one_hot = tf.one_hot(groundTruth, config.nr_class)
+         if target != None:
++            print("<<< target mode >>>")
+             target_one_hot = tf.one_hot(target, config.nr_class)
+         else:
+             target_one_hot = tf.one_hot(groundTruth, config.nr_class)
+ 
+         "计算损失和acc：使用交叉熵"
+-        loss = tf.losses.softmax_cross_entropy(target_one_hot, logits) * (-1)  # loss尽量小 === 最大化熵 === 欺骗成功
+-        "acc 大表示攻击失败了"
++        alpha = 0.0001
++        "loss尽量小 === 最大化熵 === 欺骗成功"
++        # loss = tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(labels=target_one_hot, logits=logits)) * (-1)
++        "target攻击"
++        loss = tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(labels=target_one_hot, logits=logits))
++        l2_loss = tf.reduce_mean((x_round - x) ** 2)
++        loss += l2_loss * alpha
++        "在untarget 攻击中，acc=0表示攻击成功；"
++        "在target 攻击中，acc=1表示攻击成功"
+         acc = tf.reduce_mean(tf.cast(tf.equal(tf.cast(tf.argmax(preds, 1), dtype=tf.int32),
+-                                              tf.cast(tf.argmax(gt_one_hot, 1), dtype=tf.int32)), tf.float32))
++                                              tf.cast(tf.argmax(target_one_hot, 1), dtype=tf.int32)), tf.float32))
+         return acc, loss, x_round
+ 
+     '''Build a graph for evaluating the classification result of adversarial examples'''
+--- "code\\train.py"	2020-03-26 13:08:09.253727200 +0800
++++ train.py	2020-04-01 21:51:03.586993200 +0800
+@@ -1,12 +1,20 @@
+ def get_dataset_batch(ds_name):  # 得到一个数据加载的迭代器
+@@ -37,13 +45,13 @@
+ 
+     data = tf.placeholder(tf.float32, shape=(config.minibatch_size,) + config.image_shape, name='data')
+     label = tf.placeholder(tf.int32, shape=(None,), name='label')  # placeholder for targetted label
+-    groundTruth = tf.placeholder(tf.int32, shape=(None,), name='groundTruth')
++    groundTruth = tf.placeholder(tf.int32, shape=(None,), name='groundTruth')  # 真实的样本标签
+ 
+-    pre_noise = tf.Variable(tf.nn.sigmoid(tf.random_uniform((1, 32, 32, 3), -3, 3)))
++    pre_noise = tf.Variable(tf.zeros([1, 32, 32, 3], dtype=tf.float32))
+     vgg16 = Vgg16()
+     attack = Attack(vgg16, config.minibatch_size)  # 初始化一个攻击模型对象
+     acc, loss, adv = attack.generate_graph(pre_noise, data, groundTruth, label)
+-    acc_gt = attack.evaluate(data, groundTruth)
++    acc_gt = attack.evaluate(data, label)
+ 
+     placeholders = {
+         'data': data,
+@@ -60,20 +68,21 @@
+     tf.set_random_seed(12345)  # ensure consistent results
+     succ = 0
+     noise_l2 = 0
+-    with tf.Session() as sess:
++    target = np.array([7])
++    with tf.Session(config=configTf) as sess:
+         # print(train_set.minibatches)
++        sess.run(tf.global_variables_initializer())  # init all variables
+         for idx in range(train_set.minibatches):
+             global_cnt = 0
+-            sess.run(tf.global_variables_initializer())  # init all variables
+             images, labels = sess.run(train_batch_gnr)
+-
+             for epoch in range(1, config.nr_epoch + 1):
+                 global_cnt += 1
+                 feed_dict = {
+                     placeholders['data']: images,
+-                    placeholders['label']: labels,
++                    placeholders['label']: target,
+                     placeholders['groundTruth']: labels,
+                 }
++                "target attack should convert all the pics to horse"
+                 _, accuracy, loss_batch, adv_examples = sess.run([train, acc, loss, adv],
+                                                                  feed_dict=feed_dict)
+ 
+@@ -84,14 +93,14 @@
+                         'loss: {:.3f}'.format(loss_batch),
+                         'accuracy: {:3f}'.format(accuracy),
+                     )
+-                    outPath = './out/' + '{}_{}.jpg'.format(idx,  global_cnt)
++                    outPath = './out/' + '{}_{}.jpg'.format(idx, global_cnt)
+                     # print(outPath)
+                     output_img(pre_noise, sess, outPath)
+ 
+             print('Training for batch {} is done'.format(idx))
+             output_img(x=adv_examples, out_path='./out/adv_examples/{}.png'.format(idx))  # 输出对抗样本
+             accuracy_gt = acc_gt.eval(
+-                feed_dict={placeholders['data']: adv_examples, placeholders['groundTruth']: labels})  # 计算对抗样本精确率
++                feed_dict={placeholders['data']: adv_examples, placeholders['label']: target})  # 计算对抗样本精确率
+             succ = (idx * succ + 1 - accuracy_gt) / (idx + 1)
+             noise_l2 = (idx * (noise_l2) + ((adv_examples - images)) ** 2) / (idx + 1)
+             print('Success rate of this attack is {}'.format(succ))
+@@ -99,5 +108,5 @@
